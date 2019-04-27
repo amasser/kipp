@@ -19,7 +19,7 @@ import (
 
 	"github.com/alecthomas/units"
 	"github.com/boltdb/bolt"
-	"github.com/uhthomas/kipp"
+	"github.com/uhthomas/kipp/pkg/kipp"
 	kingpin "gopkg.in/alecthomas/kingpin.v2"
 )
 
@@ -57,7 +57,7 @@ func loadMimeTypes(path string) error {
 	return nil
 }
 
-func CertificateGetter(certFile, keyFile string) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+func certificateGetter(certFile, keyFile string) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	var cached *tls.Certificate
 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		if cached != nil {
@@ -228,7 +228,7 @@ func main() {
 		Addr:    *addr,
 		Handler: s,
 		TLSConfig: &tls.Config{
-			GetCertificate: CertificateGetter(*cert, *key),
+			GetCertificate: certificateGetter(*cert, *key),
 			CipherSuites: []uint16{
 				tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
 				tls.TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
