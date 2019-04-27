@@ -14,28 +14,27 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"runtime"
 	"time"
 
 	"github.com/alecthomas/units"
 	"github.com/boltdb/bolt"
 	"github.com/uhthomas/kipp/pkg/kipp"
-	kingpin "gopkg.in/alecthomas/kingpin.v2"
+	"gopkg.in/alecthomas/kingpin.v2"
 )
 
 type worker time.Duration
 
 func (w worker) Do(ctx context.Context, f func() error) {
-loop:
-	if err := f(); err != nil {
-		log.Fatal(err)
-	}
-	t := time.After(time.Duration(w))
-	select {
-	case <-ctx.Done():
-		return
-	case <-t:
-		goto loop
+	for {
+		if err := f(); err != nil {
+			log.Fatal(err)
+		}
+		t := time.After(time.Duration(w))
+		select {
+		case <-ctx.Done():
+			return
+		case <-t:
+		}
 	}
 }
 
@@ -245,8 +244,6 @@ func main() {
 		// WriteTimeout: 10 * time.Second,
 		IdleTimeout: 120 * time.Second,
 	}
-	// Use multiple cores for concurrent serving
-	runtime.GOMAXPROCS(runtime.NumCPU())
 	// Output a message so users know when the server has been started.
 	log.Printf("Listening on %s", *addr)
 	log.Fatal(hs.ListenAndServeTLS("", ""))
