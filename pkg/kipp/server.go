@@ -2,10 +2,8 @@ package kipp
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
-	"encoding/gob"
 	"errors"
 	"fmt"
 	"io"
@@ -34,6 +32,7 @@ type Server struct {
 	FilePath   string
 	TempPath   string
 	PublicPath string
+	Store      Store
 }
 
 // Cleanup will delete expired files and remove files associated with it as
@@ -109,25 +108,14 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if dir != "/" {
 			return nil, os.ErrNotExist
 		}
-		// trim anything after "."
+		// trim anything after the first "."
 		if i := strings.Index(name, "."); i > -1 {
 			name = name[:i]
 		}
-		var out struct {
-			Checksum  string
-			CreatedAt time.Time
-			Expires   *time.Time
-			Name      string
-			Size      uint64
-		}
-		if err := s.DB.View(func(tx *bolt.Tx) error {
-			return gob.NewDecoder(bytes.NewReader(tx.Bucket([]byte("files")).Get([]byte(name)))).Decode(&out)
-		}); err == io.EOF {
-			return nil, os.ErrNotExist
-		} else if err != nil {
+		out, err := s.Store.File(name)
+		if err != nil {
 			return nil, err
 		}
-
 		// 1 year
 		cache := "max-age=31536000"
 		if out.Expires != nil {
@@ -142,11 +130,6 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		f, err = os.Open(filepath.Join(s.FilePath, out.Checksum))
 		if err != nil {
-			// // looks weird, but we don't want the file server to serve 404.
-			// // this is a fatal error and should never happen
-			// if os.IsNotExist(err) {
-			// 	err = errors.New(err.Error())
-			// }
 			return nil, err
 		}
 		// Detect content type before serving content to filter html files
@@ -175,7 +158,7 @@ func (s Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Expires", out.Expires.Format(http.TimeFormat))
 		}
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		return file{f, out.CreatedAt}, nil
+		return file{f, out.Timestamp}, nil
 	})).ServeHTTP(w, r)
 }
 
@@ -222,119 +205,125 @@ func (s Server) UploadHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// If the file is uploaded successfully and renamed this operation will fail deliberately.
 	defer os.Remove(tf.Name())
 	defer tf.Close()
-	// Hash and save the file.
+	// Hash the file and write to disk.
 	h := blake2b.New512()
 	n, err := io.Copy(io.MultiWriter(tf, h), http.MaxBytesReader(w, p, s.Max))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	sum := h.Sum(nil)
-	// 9 byte ID as base64 is most efficient when it aligns to len(b) % 3
-	var b [9]byte
-	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+	sum := base64.RawURLEncoding.EncodeToString(h.Sum(nil))
+	id, err := s.Store.Create(name, uint64(n), sum)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	id := base64.RawURLEncoding.EncodeToString(b[:])
-	now := time.Now().UTC()
-	data := struct {
-		Checksum  string
-		CreatedAt time.Time
-		Expires   *time.Time
-		Name      string
-		Size      uint64
-	}{base64.RawURLEncoding.EncodeToString(sum), now, nil, name, uint64(n)}
-	if s.Expiration > 0 {
-		e := time.Now().Add(s.Expiration)
-		data.Expires = &e
-	}
-	if err := s.DB.Update(func(tx *bolt.Tx) error {
-		p := filepath.Join(s.FilePath, data.Checksum)
-		d, err := os.Stat(p)
-		// switch {
-		// // If the file exists then we should delete the current ttl (if any)
-		// case err == nil:
-		// 	var b [8]byte
-		// 	binary.BigEndian.PutUint64(b[:], uint64(d.ModTime().Unix()))
-		// 	if err := tx.Bucket([]byte("ttl")).Delete(append(b[:], sum...)); err != nil {
-		// 		return err
-		// 	}
-		// // if the file doesn't exist then it should be created
-		// case os.IsNotExist(err):
-		// 	if err := os.Rename(tf.Name(), p); err != nil {
-		// 		return err
-		// 	}
-		// default:
-		// 	return err
-		// }
-
-		if os.IsNotExist(err) {
-			if err := os.Rename(tf.Name(), p); err != nil {
-				return err
-			}
-		} else if err != nil {
-			return err
-		}
-
-		var ttl time.Time
-		if err == nil {
-			ttl = d.ModTime()
-		}
-		// if the ttl is valid
-		if ttl.IsZero() || ttl.Unix() != 0 {
-			if data.Expires == nil {
-				// and the new ttl is not then invalidate it
-				ttl = time.Unix(0, 0)
-			} else if e := *data.Expires; ttl.Before(e) {
-				// and the current ttl is before the new ttl
-				ttl = e
-			}
-		}
-
-		// if the file exists, the ttl is valid and the old ttl is before the new ttl
-		if err == nil && d.ModTime().Unix() != 0 && d.ModTime().Before(ttl) {
-			var b [8]byte
-			binary.BigEndian.PutUint64(b[:], uint64(d.ModTime().Unix()))
-			if err := tx.Bucket([]byte("ttl")).Delete(append(b[:], sum...)); err != nil {
-				return err
-			}
-		}
-
-		// if the file doesn't exist or the new ttl is not equal to the current ttl then update it
-		if os.IsNotExist(err) || !d.ModTime().Equal(ttl) {
-			if err := os.Chtimes(p, now, ttl); err != nil {
-				return err
-			}
-
-			// if the new ttl is valid then add it to the bucket
-			if ttl.Unix() != 0 {
-				var b [8]byte
-				binary.BigEndian.PutUint64(b[:], uint64(ttl.Unix()))
-				if err := tx.Bucket([]byte("ttl")).Put(append(b[:], sum...), sum); err != nil {
-					return err
-				}
-			}
-		}
-
-		var buf bytes.Buffer
-		if err := gob.NewEncoder(&buf).Encode(data); err != nil {
-			return err
-		}
-		return tx.Bucket([]byte("files")).Put([]byte(id), buf.Bytes())
-	}); err != nil {
+	// link instead of rename since it will not overwrite the original file if it exists, also prevents race
+	// conditions using stat.
+	if err := os.Link(tf.Name(), filepath.Join(s.FilePath, sum)); err != nil && !os.IsExist(err) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	// "/" + id + ext
-	var buf bytes.Buffer
-	buf.WriteRune('/')
-	buf.WriteString(id)
-	buf.WriteString(filepath.Ext(name))
-	http.Redirect(w, r, buf.String(), http.StatusSeeOther)
-	buf.WriteRune('\n')
-	buf.WriteTo(w)
+	// id := base64.RawURLEncoding.EncodeToString(b[:])
+	// now := time.Now().UTC()
+	// data := struct {
+	// 	Checksum  string
+	// 	CreatedAt time.Time
+	// 	Expires   *time.Time
+	// 	Name      string
+	// 	Size      uint64
+	// }{base64.RawURLEncoding.EncodeToString(sum), now, nil, name, uint64(n)}
+	// if s.Expiration > 0 {
+	// 	e := time.Now().Add(s.Expiration)
+	// 	data.Expires = &e
+	// }
+	// if err := s.DB.Update(func(tx *bolt.Tx) error {
+	// 	p := filepath.Join(s.FilePath, data.Checksum)
+	// 	d, err := os.Stat(p)
+	// 	// switch {
+	// 	// // If the file exists then we should delete the current ttl (if any)
+	// 	// case err == nil:
+	// 	// 	var b [8]byte
+	// 	// 	binary.BigEndian.PutUint64(b[:], uint64(d.ModTime().Unix()))
+	// 	// 	if err := tx.Bucket([]byte("ttl")).Delete(append(b[:], sum...)); err != nil {
+	// 	// 		return err
+	// 	// 	}
+	// 	// // if the file doesn't exist then it should be created
+	// 	// case os.IsNotExist(err):
+	// 	// 	if err := os.Rename(tf.Name(), p); err != nil {
+	// 	// 		return err
+	// 	// 	}
+	// 	// default:
+	// 	// 	return err
+	// 	// }
+	//
+	// 	if os.IsNotExist(err) {
+	// 		if err := os.Rename(tf.Name(), p); err != nil {
+	// 			return err
+	// 		}
+	// 	} else if err != nil {
+	// 		return err
+	// 	}
+	//
+	// 	var ttl time.Time
+	// 	if err == nil {
+	// 		ttl = d.ModTime()
+	// 	}
+	// 	// if the ttl is valid
+	// 	if ttl.IsZero() || ttl.Unix() != 0 {
+	// 		if data.Expires == nil {
+	// 			// and the new ttl is not then invalidate it
+	// 			ttl = time.Unix(0, 0)
+	// 		} else if e := *data.Expires; ttl.Before(e) {
+	// 			// and the current ttl is before the new ttl
+	// 			ttl = e
+	// 		}
+	// 	}
+	//
+	// 	// if the file exists, the ttl is valid and the old ttl is before the new ttl
+	// 	if err == nil && d.ModTime().Unix() != 0 && d.ModTime().Before(ttl) {
+	// 		var b [8]byte
+	// 		binary.BigEndian.PutUint64(b[:], uint64(d.ModTime().Unix()))
+	// 		if err := tx.Bucket([]byte("ttl")).Delete(append(b[:], sum...)); err != nil {
+	// 			return err
+	// 		}
+	// 	}
+	//
+	// 	// if the file doesn't exist or the new ttl is not equal to the current ttl then update it
+	// 	if os.IsNotExist(err) || !d.ModTime().Equal(ttl) {
+	// 		if err := os.Chtimes(p, now, ttl); err != nil {
+	// 			return err
+	// 		}
+	//
+	// 		// if the new ttl is valid then add it to the bucket
+	// 		if ttl.Unix() != 0 {
+	// 			var b [8]byte
+	// 			binary.BigEndian.PutUint64(b[:], uint64(ttl.Unix()))
+	// 			if err := tx.Bucket([]byte("ttl")).Put(append(b[:], sum...), sum); err != nil {
+	// 				return err
+	// 			}
+	// 		}
+	// 	}
+	//
+	// 	var b bytes.Buffer
+	// 	if err := gob.NewEncoder(&b).Encode(data); err != nil {
+	// 		return err
+	// 	}
+	// 	return tx.Bucket([]byte("files")).Put([]byte(id), b.Bytes())
+	// }); err != nil {
+	// 	http.Error(w, err.Error(), http.StatusInternalServerError)
+	// 	return
+	// }
+	// '/' + id + ext + '\n'
+	ext := filepath.Ext(name)
+	var b strings.Builder
+	b.Grow(len(id) + len(ext) + 2)
+	b.WriteRune('/')
+	b.WriteString(id)
+	b.WriteString(ext)
+	http.Redirect(w, r, b.String(), http.StatusSeeOther)
+	b.WriteRune('\n')
+	io.Copy(w, strings.NewReader(b.String()))
 }

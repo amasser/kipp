@@ -6,4 +6,5 @@ RUN apk update && \
 
 FROM scratch
 COPY --from=build /go/src/github.com/uhthomas/kipp/default /
+COPY --from=build /go/src/github.com/uhthomas/kipp/deploy/kipp.cql /kipp.cql
 ENTRYPOINT ["/kipp", "--mime", "mime.json", "--files", "/data/files", "--tmp", "/data/tmp", "--store", "/data/kipp.db"]

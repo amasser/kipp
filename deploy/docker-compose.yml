@@ -1,0 +1,31 @@
+version: '3.7'
+services:
+  scylla:
+    image: scylladb/scylla:3.0.5
+    restart: always
+    networks:
+      - kipp
+    volumes:
+      - scylla:/var/lib/scylla
+    healthcheck:
+      test: ["CMD", "cqlsh", "-u cassandra", "-p cassandra" ,"-e describe keyspaces"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+  kipp:
+    build:
+      context: ..
+      dockerfile: build/package/Dockerfile
+    ports:
+      - 1337:443
+    networks:
+      - kipp
+    volumes:
+      - kipp:/data
+    depends_on:
+      - scylla
+networks:
+  kipp:
+volumes:
+  kipp:
+  scylla:

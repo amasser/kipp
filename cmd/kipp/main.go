@@ -13,11 +13,10 @@ import (
 	"mime"
 	"net/http"
 	"os"
-	"path"
 	"time"
 
 	"github.com/alecthomas/units"
-	"github.com/boltdb/bolt"
+	"github.com/uhthomas/kipp/internal/scylla"
 	"github.com/uhthomas/kipp/pkg/kipp"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
@@ -110,7 +109,6 @@ func certificateGetter(certFile, keyFile string) func(hello *tls.ClientHelloInfo
 
 func main() {
 	var s kipp.Server
-	var store string
 	servecmd := kingpin.Command("serve", "Start a kipp server.").Default()
 
 	addr := servecmd.
@@ -131,10 +129,10 @@ func main() {
 		Flag("mime", "A json formatted collection of extensions and mime types.").
 		PlaceHolder("PATH").
 		String()
-	servecmd.
-		Flag("store", "Database file path.").
-		Default("kipp.db").
-		StringVar(&store)
+	// servecmd.
+	// 	Flag("store", "Database file path.").
+	// 	Default("kipp.db").
+	// 	StringVar(&store)
 	servecmd.
 		Flag("expiration", "File expiration time.").
 		Default("24h").
@@ -198,23 +196,13 @@ func main() {
 	if err := os.MkdirAll(s.TempPath, 0755); err != nil && !os.IsExist(err) {
 		log.Fatal(err)
 	}
-	if err := os.MkdirAll(path.Dir(store), 0755); err != nil && !os.IsExist(err) {
-		log.Fatal(err)
-	}
 
 	// Connect to database
-	db, err := bolt.Open(store, 0600, nil)
+	store, err := scylla.NewStore("localhost:9042")
 	if err != nil {
 		log.Fatal(err)
 	}
-	db.Update(func(tx *bolt.Tx) error {
-		if _, err := tx.CreateBucketIfNotExists([]byte("files")); err != nil {
-			return err
-		}
-		_, err := tx.CreateBucketIfNotExists([]byte("ttl"))
-		return err
-	})
-	s.DB = db
+	s.Store = store
 
 	// Start cleanup worker
 	if s.Expiration > 0 {
@@ -240,9 +228,9 @@ func main() {
 			MinVersion:               tls.VersionTLS12,
 			CurvePreferences:         []tls.CurveID{tls.CurveP256, tls.X25519},
 		},
-		// ReadTimeout:  5 * time.Second,
-		// WriteTimeout: 10 * time.Second,
-		IdleTimeout: 120 * time.Second,
+		ReadTimeout:  5 * time.Second,
+		WriteTimeout: 10 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 	// Output a message so users know when the server has been started.
 	log.Printf("Listening on %s", *addr)
