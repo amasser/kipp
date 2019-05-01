@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -19,22 +18,6 @@ import (
 	"github.com/uhthomas/kipp/pkg/kipp"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
-
-type worker time.Duration
-
-func (w worker) Do(ctx context.Context, f func() error) {
-	for {
-		if err := f(); err != nil {
-			log.Fatal(err)
-		}
-		t := time.After(time.Duration(w))
-		select {
-		case <-ctx.Done():
-			return
-		case <-t:
-		}
-	}
-}
 
 func loadMimeTypes(path string) error {
 	f, err := os.Open(path)
