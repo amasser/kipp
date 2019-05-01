@@ -7,22 +7,21 @@ import (
 	"log"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/gocql/gocql"
-	"github.com/scylladb/gocqlx"
-	scyllaqb "github.com/scylladb/gocqlx/qb"
 	"github.com/uhthomas/kipp/pkg/kipp"
 )
 
 const table = "kipp.files"
 
 type Store struct {
-	session  *gocql.Session
-	lifetime time.Duration
+	session                *gocql.Session
+	fileQuery, createQuery QueryFunc
 }
 
-func NewStore(addr ...string) (*Store, error) {
+// addresses
+// query file/reader? at least the path?
+func New(addr ...string) (*Store, error) {
 	c := gocql.NewCluster(addr...)
 	c.Keyspace = "kipp"
 	s, err := c.CreateSession()
@@ -41,11 +40,15 @@ func NewStore(addr ...string) (*Store, error) {
 	if err := s.Query(b.String()).Exec(); err != nil {
 		return nil, err
 	}
-	return &Store{s, 0}, err
+	return &Store{s, NewFileQuery(s), NewCreateQuery(s, 0)}, nil
 }
 
 func (s *Store) File(id string) (*kipp.File, error) {
-	return nil, nil
+	var f kipp.File
+	if err := s.fileQuery().Bind(id).GetRelease(&f); err != nil {
+		return nil, err
+	}
+	return &f, nil
 }
 
 func (s *Store) Create(name string, size uint64, checksum string) (string, error) {
@@ -55,12 +58,7 @@ func (s *Store) Create(name string, size uint64, checksum string) (string, error
 		return "", err
 	}
 	id := base64.RawURLEncoding.EncodeToString(b[:])
-	stmt, names := scyllaqb.
-		Insert(table).
-		Columns("id", "name", "size", "checksum").
-		TTL(s.lifetime).
-		ToCql()
-	if err := gocqlx.Query(s.session.Query(stmt), names).BindStruct(&kipp.File{
+	if err := s.createQuery().BindStruct(&kipp.File{
 		ID:       id,
 		Name:     name,
 		Size:     size,
@@ -69,4 +67,9 @@ func (s *Store) Create(name string, size uint64, checksum string) (string, error
 		return "", err
 	}
 	return id, nil
+}
+
+func (s *Store) Close() error {
+	s.session.Close()
+	return nil
 }

@@ -15,7 +15,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/alecthomas/units"
 	"github.com/uhthomas/kipp/internal/scylla"
 	"github.com/uhthomas/kipp/pkg/kipp"
 	"gopkg.in/alecthomas/kingpin.v2"
@@ -108,7 +107,6 @@ func certificateGetter(certFile, keyFile string) func(hello *tls.ClientHelloInfo
 }
 
 func main() {
-	var s kipp.Server
 	servecmd := kingpin.Command("serve", "Start a kipp server.").Default()
 
 	addr := servecmd.
@@ -121,10 +119,10 @@ func main() {
 	key := servecmd.
 		Flag("key", "TLS key path.").
 		String()
-	cleanupInterval := servecmd.
-		Flag("cleanup-interval", "Cleanup interval for deleting expired files.").
-		Default("5m").
-		Duration()
+	// cleanupInterval := servecmd.
+	// 	Flag("cleanup-interval", "Cleanup interval for deleting expired files.").
+	// 	Default("5m").
+	// 	Duration()
 	mime := servecmd.
 		Flag("mime", "A json formatted collection of extensions and mime types.").
 		PlaceHolder("PATH").
@@ -133,26 +131,22 @@ func main() {
 	// 	Flag("store", "Database file path.").
 	// 	Default("kipp.db").
 	// 	StringVar(&store)
-	servecmd.
+	lifetime := servecmd.
 		Flag("expiration", "File expiration time.").
 		Default("24h").
-		DurationVar(&s.Expiration)
-	servecmd.
+		Duration()
+	max := servecmd.
 		Flag("max", "The maximum file size  for uploads.").
 		Default("150MB").
-		BytesVar((*units.Base2Bytes)(&s.Max))
-	servecmd.
-		Flag("files", "File path.").
+		Bytes()
+	p := servecmd.
+		Flag("path", "File path.").
 		Default("files").
-		StringVar(&s.FilePath)
-	servecmd.
-		Flag("tmp", "Temp path for in-progress uploads.").
-		Default("files/tmp").
-		StringVar(&s.TempPath)
-	servecmd.
+		String()
+	publicPath := servecmd.
 		Flag("public", "Public path for web resources.").
 		Default("public").
-		StringVar(&s.PublicPath)
+		String()
 
 	var u UploadCommand
 	{
@@ -190,26 +184,35 @@ func main() {
 	}
 
 	// Make paths for files and temp files
-	if err := os.MkdirAll(s.FilePath, 0755); err != nil && !os.IsExist(err) {
-		log.Fatal(err)
-	}
-	if err := os.MkdirAll(s.TempPath, 0755); err != nil && !os.IsExist(err) {
+	if err := os.MkdirAll(*p, 0755); err != nil && !os.IsExist(err) {
 		log.Fatal(err)
 	}
 
 	// Connect to database
-	store, err := scylla.NewStore("localhost:9042")
+	store, err := scylla.New("localhost:9042")
 	if err != nil {
 		log.Fatal(err)
 	}
 	s.Store = store
 
 	// Start cleanup worker
-	if s.Expiration > 0 {
-		w := worker(*cleanupInterval)
-		go w.Do(context.Background(), s.Cleanup)
-	}
+	// if s.lifetime > 0 {
+	// 	w := worker(*cleanupInterval)
+	// 	go w.Do(context.Background(), s.Cleanup)
+	// }
 
+	var opts []kipp.Option
+	if lifetime != nil {
+		opts = append(opts, kipp.Lifetime(*lifetime))
+	}
+	if p != nil {
+		opts = append(opts, kipp.Path(*p))
+	}
+	if max != nil {
+		opts = append(opts, kipp.Max(int64(*max)))
+	}
+	s := kipp.New(opts...)
+	s.PublicPath = *publicPath
 	// Start HTTP server
 	hs := &http.Server{
 		Addr:    *addr,
