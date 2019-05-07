@@ -5,11 +5,9 @@ import (
 	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"log"
 	"math/big"
-	"mime"
 	"net/http"
 	"os"
 	"time"
@@ -18,24 +16,6 @@ import (
 	"github.com/uhthomas/kipp/pkg/kipp"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
-
-func loadMimeTypes(path string) error {
-	f, err := os.Open(path)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer f.Close()
-	m := make(map[string][]string)
-	if err := json.NewDecoder(f).Decode(&m); err != nil {
-		return err
-	}
-	for k, v := range m {
-		for _, vv := range v {
-			mime.AddExtensionType(vv, k)
-		}
-	}
-	return nil
-}
 
 func certificateGetter(certFile, keyFile string) func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 	var cached *tls.Certificate
@@ -90,81 +70,42 @@ func certificateGetter(certFile, keyFile string) func(hello *tls.ClientHelloInfo
 }
 
 func main() {
-	servecmd := kingpin.Command("serve", "Start a kipp server.").Default()
-
-	addr := servecmd.
-		Flag("addr", "Server listen address.").
+	addr := kingpin.
+		Flag("addr", "Handler listen address.").
 		Default("0.0.0.0:443").
 		String()
-	cert := servecmd.
+	cert := kingpin.
 		Flag("cert", "TLS certificate path.").
 		String()
-	key := servecmd.
+	key := kingpin.
 		Flag("key", "TLS key path.").
 		String()
 	// cleanupInterval := servecmd.
 	// 	Flag("cleanup-interval", "Cleanup interval for deleting expired files.").
 	// 	Default("5m").
 	// 	Duration()
-	mime := servecmd.
-		Flag("mime", "A json formatted collection of extensions and mime types.").
-		PlaceHolder("PATH").
-		String()
 	// servecmd.
-	// 	Flag("store", "Database file path.").
+	// 	Flag("s", "Database file path.").
 	// 	Default("kipp.db").
-	// 	StringVar(&store)
-	lifetime := servecmd.
-		Flag("expiration", "File expiration time.").
+	// 	StringVar(&s)
+	lifetime := kingpin.
+		Flag("lifetime", "Entity lifetime.").
 		Default("24h").
 		Duration()
-	max := servecmd.
+	max := kingpin.
 		Flag("max", "The maximum file size  for uploads.").
 		Default("150MB").
 		Bytes()
-	p := servecmd.
-		Flag("path", "File path.").
-		Default("files").
+	p := kingpin.
+		Flag("path", "Entity path.").
+		Default("data").
 		String()
-	publicPath := servecmd.
-		Flag("public", "Public path for web resources.").
-		Default("public").
+	web := kingpin.
+		Flag("web", "Location of web resources.").
+		Default("web").
 		String()
 
-	var u UploadCommand
-	{
-		uploadcmd := kingpin.Command("upload", "Upload a file.")
-		uploadcmd.
-			Arg("file", "File to be uploaded").
-			Required().
-			FileVar(&u.File)
-		uploadcmd.
-			Flag("insecure", "Don't verify SSL certificates.").
-			BoolVar(&u.Insecure)
-		uploadcmd.
-			Flag("private", "Encrypt the uploaded file").
-			BoolVar(&u.Private)
-		uploadcmd.
-			Flag("url", "Source URL").
-			Envar("kipp-upload-url").
-			Default("https://kipp.6f.io").
-			URLVar(&u.URL)
-	}
-
-	t := kingpin.Parse()
-
-	// kipp upload
-	if t == "upload" {
-		u.Do()
-		return
-	}
-
-	// Load mime types
-	if m := *mime; m != "" {
-		if err := loadMimeTypes(m); err != nil {
-			log.Fatal(err)
-		}
-	}
+	kingpin.Parse()
 
 	// Make paths for files and temp files
 	if err := os.MkdirAll(*p, 0755); err != nil && !os.IsExist(err) {
@@ -172,34 +113,39 @@ func main() {
 	}
 
 	// Connect to database
-	store, err := scylla.New("localhost:9042")
+	s, err := scylla.New("localhost:9042")
 	if err != nil {
 		log.Fatal(err)
 	}
-	s.Store = store
 
 	// Start cleanup worker
-	// if s.lifetime > 0 {
+	// if h.lifetime > 0 {
 	// 	w := worker(*cleanupInterval)
-	// 	go w.Do(context.Background(), s.Cleanup)
+	// 	go w.Do(context.Background(), h.Cleanup)
 	// }
 
 	var opts []kipp.Option
+	if s != nil {
+		opts = append(opts, kipp.Store(s))
+	}
 	if lifetime != nil {
 		opts = append(opts, kipp.Lifetime(*lifetime))
-	}
-	if p != nil {
-		opts = append(opts, kipp.Path(*p))
 	}
 	if max != nil {
 		opts = append(opts, kipp.Max(int64(*max)))
 	}
-	s := kipp.New(opts...)
-	s.PublicPath = *publicPath
-	// Start HTTP server
-	hs := &http.Server{
+	if p != nil {
+		opts = append(opts, kipp.Path(*p))
+	}
+	if web != nil {
+		opts = append(opts, kipp.Web(*web))
+	}
+
+	// Output a message so users know when the server has been started.
+	log.Printf("Listening on %s", *addr)
+	log.Fatal((&http.Server{
 		Addr:    *addr,
-		Handler: s,
+		Handler: kipp.New(opts...),
 		TLSConfig: &tls.Config{
 			GetCertificate: certificateGetter(*cert, *key),
 			CipherSuites: []uint16{
@@ -214,11 +160,14 @@ func main() {
 			MinVersion:               tls.VersionTLS12,
 			CurvePreferences:         []tls.CurveID{tls.CurveP256, tls.X25519},
 		},
-		ReadTimeout:  5 * time.Second,
-		WriteTimeout: 10 * time.Second,
-		IdleTimeout:  120 * time.Second,
-	}
-	// Output a message so users know when the server has been started.
-	log.Printf("Listening on %s", *addr)
-	log.Fatal(hs.ListenAndServeTLS("", ""))
+		// "ReadTimeout is the maximum duration for reading the entire
+		// request, including the body."
+		//
+		// To allow files to be uploaded over a matter of minutes, this timeout must be a sensible value.
+		ReadTimeout:       3 * time.Minute,
+		ReadHeaderTimeout: 5 * time.Second,
+		// The WriteTimeout must be at least equal or longer than ReadTimeout, therefore it is ReadTimeout + 5s.
+		WriteTimeout: (3 * time.Minute) + (5 * time.Second),
+		IdleTimeout:  2 * time.Minute,
+	}).ListenAndServeTLS("", ""))
 }

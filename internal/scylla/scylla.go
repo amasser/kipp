@@ -4,9 +4,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"io"
-	"log"
-	"os"
-	"strings"
 
 	"github.com/gocql/gocql"
 	"github.com/uhthomas/kipp/pkg/kipp"
@@ -15,8 +12,8 @@ import (
 const table = "kipp.files"
 
 type Store struct {
-	session                *gocql.Session
-	fileQuery, createQuery QueryFunc
+	session                  *gocql.Session
+	entityQuery, createQuery QueryFunc
 }
 
 // addresses
@@ -28,27 +25,18 @@ func New(addr ...string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.Open("kipp.cql")
-	if err != nil {
+	if err := s.Query(schema).Exec(); err != nil {
 		return nil, err
 	}
-	var b strings.Builder
-	if _, err := io.Copy(&b, f); err != nil {
-		return nil, err
-	}
-	log.Print(b.String())
-	if err := s.Query(b.String()).Exec(); err != nil {
-		return nil, err
-	}
-	return &Store{s, NewFileQuery(s), NewCreateQuery(s, 0)}, nil
+	return &Store{s, EntityQuery(s), CreateQuery(s, 0)}, nil
 }
 
-func (s *Store) File(id string) (*kipp.File, error) {
-	var f kipp.File
-	if err := s.fileQuery().Bind(id).GetRelease(&f); err != nil {
+func (s *Store) Entity(id string) (*kipp.Entity, error) {
+	var e kipp.Entity
+	if err := s.entityQuery().Bind(id).Get(&e); err != nil {
 		return nil, err
 	}
-	return &f, nil
+	return &e, nil
 }
 
 func (s *Store) Create(name string, size uint64, checksum string) (string, error) {
@@ -58,12 +46,12 @@ func (s *Store) Create(name string, size uint64, checksum string) (string, error
 		return "", err
 	}
 	id := base64.RawURLEncoding.EncodeToString(b[:])
-	if err := s.createQuery().BindStruct(&kipp.File{
+	if err := s.createQuery().BindStruct(&kipp.Entity{
 		ID:       id,
 		Name:     name,
 		Size:     size,
 		Checksum: checksum,
-	}).ExecRelease(); err != nil {
+	}).Exec(); err != nil {
 		return "", err
 	}
 	return id, nil
