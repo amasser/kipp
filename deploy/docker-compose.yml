@@ -1,17 +1,17 @@
 version: '3.7'
 services:
   scylla:
-    image: scylladb/scylla:3.0.5
+    image: scylladb/scylla:3.0.6
     restart: always
     networks:
       - kipp
     volumes:
       - scylla:/var/lib/scylla
     healthcheck:
-      test: ["CMD", "cqlsh", "-u cassandra", "-p cassandra" ,"-e describe keyspaces"]
-      interval: 15s
+      test: ["CMD-SHELL", "[ $$(nodetool statusgossip) = running ]"]
+      interval: 30s
       timeout: 10s
-      retries: 10
+      retries: 5
   kipp:
     build:
       context: ..

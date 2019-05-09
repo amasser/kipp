@@ -32,6 +32,7 @@ spec:
     spec:
       containers:
         - name: kipp
-          image: uhthomas/kipp
+          image: uhthomas/kipp:beta
           ports:
             - containerPort: 443
+---

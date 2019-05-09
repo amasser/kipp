@@ -139,7 +139,7 @@ func (h *Handler) Files(w http.ResponseWriter, r *http.Request) {
 			if d <= 0 {
 				return nil, os.ErrNotExist
 			}
-			cache = "public, must-revalidate, max-age=" + strconv.Itoa(d)
+			cache = "must-revalidate, max-age=" + strconv.Itoa(d)
 		}
 		f, err = os.Open(filepath.Join(h.path, e.Checksum))
 		if err != nil {

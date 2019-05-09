@@ -1,7 +1,23 @@
 :root{
 	--accent: #00e676;
 	--accent-dark: #00e6768a;
-	--accent-secondary: #FF1744;
+
+	--error: #cf6679;
+
+	--high-emphasis: #dedede;
+	--medium-emphasis: #999999;
+	--disabled: #616161;
+
+	--surface: #121212;
+	--surface-1: #1f1f1f;
+	--surface-2: #242424;
+	--surface-3: #262626;
+	--surface-4: #292929;
+	--surface-6: #2e2e2e;
+	--surface-8: #313131;
+	--surface-12: #363636;
+	--surface-16: #383838;
+	--surface-24: #3b3b3b;
 }
 
 ::-webkit-file-upload-button {
@@ -147,7 +163,7 @@ button:hover {
 	max-width: 480px;
 	margin: auto;
 	overflow: hidden;
-	background: #313235;
+	background: var(--surface-6);
 	border-radius: 16px;
 	z-index: 1;
 	position: fixed;
@@ -202,7 +218,7 @@ button:hover {
 	border-top-left-radius: 16px;
 	border-top-right-radius: 16px;
 	box-shadow: 0px 3px 1px -2px rgba(0, 0, 0, 0.2), 0px 2px 2px 0px rgba(0, 0, 0, 0.14), 0px 1px 5px 0px rgba(0, 0, 0, 0.12);
-	background: #313235;
+	background: var(--surface-6);
 	overflow: hidden;
 	position: fixed;
 	bottom: 0;
@@ -333,8 +349,8 @@ main .file {
 	transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
 	transition-duration: 280ms;
 	border-radius: 16px;
-	box-shadow: 0 0 0 1px #ffffff1c;
 	margin: 0 16px;
+	background: var(--surface-1);
 }
 
 main .file[rendered] {
@@ -448,7 +464,7 @@ main .file[state="uploading"] .buttons button.primary:before {
 
 main .file[state="done"] .buttons button.secondary:before {
 	content: 'Remove';
-	color: var(--accent-secondary);
+	color: var(--error);
 }
 
 main .file[state="done"] .buttons button.primary:before {
@@ -470,7 +486,7 @@ main .darken.open {
 
 main .drawer {
 	width: 100%;
-	background: #313235;
+	background: var(--surface-6);
 	border-top-left-radius: 16px;
 	border-top-right-radius: 16px;
 	box-shadow: 0 3px 1px -2px rgba(0,0,0,.2), 0 2px 2px 0 rgba(0,0,0,.14), 0 1px 5px 0 rgba(0,0,0,.12);
@@ -546,7 +562,7 @@ main .drawer .item[icon] {
 }
 
 main .drawer .item[icon="report"] {
-	--accent: var(--accent-secondary);
+	--accent: var(--error);
 }
 
 main .drawer .item[icon]::before {

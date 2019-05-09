@@ -143,6 +143,7 @@ func main() {
 
 	// Output a message so users know when the server has been started.
 	log.Printf("Listening on %s", *addr)
+	log.Print("v1")
 	log.Fatal((&http.Server{
 		Addr:    *addr,
 		Handler: kipp.New(opts...),
